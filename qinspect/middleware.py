@@ -140,7 +140,7 @@ class QueryInspectMiddleware(MiddlewareMixin):
             qi = cls.QueryInfo()
             qi.sql = cls.sql_id_pattern.sub("= ?", q["sql"])
             qi.time = float(q["time"])
-            qi.tb = q.get("tb")
+            qi.tb = q.get("tb") or []
             qi.summaries = []  # FrameSummary objects
             for summary in qi.tb:
                 qi.summaries.append(summary)
