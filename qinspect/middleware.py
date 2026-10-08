@@ -54,6 +54,18 @@ cfg = dict(
     ),
     absolute_limit=getattr(settings, "QUERY_INSPECT_ABSOLUTE_LIMIT", None),
     sql_log_limit=getattr(settings, "QUERY_INSPECT_SQL_LOG_LIMIT", None),
+    # Only pay the (expensive) traceback.extract_stack() cost for queries
+    # that are already slow enough to be interesting. Defaults to
+    # QUERY_INSPECT_ABSOLUTE_LIMIT so a query only gets a captured
+    # traceback if it would already trigger a slow-query warning.
+    tb_min_time=(
+        getattr(
+            settings,
+            "QUERY_INSPECT_TRACEBACK_MIN_TIME",
+            getattr(settings, "QUERY_INSPECT_ABSOLUTE_LIMIT", 0) or 0,
+        )
+        / 1000.0
+    ),
 )
 
 __all__ = ["QueryInspectMiddleware"]
@@ -115,11 +127,20 @@ class QueryInspectMiddleware(MiddlewareMixin):
                 try:
                     return fn(self, *args, **kwargs)
                 finally:
-                    if hasattr(self.db, "queries"):
-                        tb = traceback.extract_stack()
-                        tb = [f for f in tb if should_include(f[0])]
-                        if self.db.queries:
-                            self.db.queries[-1]["tb"] = tb
+                    if hasattr(self.db, "queries") and self.db.queries:
+                        tb = []
+                        if cfg["log_tbs"]:
+                            # self.db.queries[-1]["time"] is already
+                            # populated by Django's own debug cursor by
+                            # the time we get here, so we can gate the
+                            # expensive extract_stack() walk on it and
+                            # only pay that cost for queries slow enough
+                            # to matter.
+                            qtime = float(self.db.queries[-1]["time"])
+                            if qtime >= cfg["tb_min_time"]:
+                                tb = traceback.extract_stack()
+                                tb = [f for f in tb if should_include(f[0])]
+                        self.db.queries[-1]["tb"] = tb
 
             return wrapper
 
