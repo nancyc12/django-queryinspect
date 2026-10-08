@@ -120,14 +120,32 @@ class QueryInspectMiddleware(MiddlewareMixin):
                         return True
                 return False
 
-        def tb_wrap(fn):
+        def tb_wrap(fn, skip_for_debug_cursor=False):
             def wrapper(self, *args, **kwargs):
                 if settings.DEBUG is False:
                     self.db.force_debug_cursor = True
                 try:
                     return fn(self, *args, **kwargs)
                 finally:
-                    if hasattr(self.db, "queries") and self.db.queries:
+                    # CursorDebugWrapper.execute()/executemany() call
+                    # super().execute()/executemany(), which resolves to
+                    # CursorWrapper._execute_with_wrappers -- the very
+                    # method patched below. When that happens, we're
+                    # still inside debug_sql's `with` block, so its own
+                    # finally (which appends the *current* query to
+                    # self.db.queries) hasn't run yet: self.db.queries[-1]
+                    # here is still the *previous* query, not this one.
+                    # Skip here and let the CursorDebugWrapper.execute/
+                    # executemany wrapper (which runs after that append)
+                    # do the real gating/capture for this query instead.
+                    already_handled_by_debug_wrapper = skip_for_debug_cursor and isinstance(
+                        self, CursorDebugWrapper
+                    )
+                    if (
+                        not already_handled_by_debug_wrapper
+                        and hasattr(self.db, "queries")
+                        and self.db.queries
+                    ):
                         tb = []
                         if cfg["log_tbs"]:
                             # self.db.queries[-1]["time"] is already
@@ -146,7 +164,9 @@ class QueryInspectMiddleware(MiddlewareMixin):
 
         if settings.DEBUG is False:
             wrapper_exec = CursorWrapper._execute_with_wrappers
-            CursorWrapper._execute_with_wrappers = tb_wrap(wrapper_exec)
+            CursorWrapper._execute_with_wrappers = tb_wrap(
+                wrapper_exec, skip_for_debug_cursor=True
+            )
 
         CursorDebugWrapper.execute = tb_wrap(real_exec)
         CursorDebugWrapper.executemany = tb_wrap(real_exec_many)
